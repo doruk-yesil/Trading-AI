@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────
+# Trading-AI  |  Main Configuration
+# ─────────────────────────────────────────────
+
+# Universe
+symbols:
+  - AAPL
+  - MSFT
+  - GOOGL
+  - AMZN
+  - NVDA
+  - META
+  - JPM
+  - SPY        # benchmark — always include
+
+benchmark: SPY
+
+# Date range (YYYY-MM-DD)
+start_date: "2015-01-01"
+end_date:   "2024-12-31"
+
+# Prediction target
+prediction_horizon: 5          # trading days forward
+min_return_threshold: 0.005    # 0.5% — must beat this + transaction cost to be label=1
+target_type: "binary"          # binary | continuous
+
+# Transaction costs
+transaction_cost_pct: 0.001    # 0.10% per trade (one-way)
+slippage_pct: 0.0005           # 0.05% slippage estimate
+
+# Portfolio
+initial_capital: 100000        # USD
+position_size_pct: 0.10        # max 10% of capital per position
+max_positions: 10              # max simultaneous open positions
+
+# Feature engineering windows
+feature_windows:
+  moving_averages: [5, 10, 20, 50, 100, 200]
+  rsi_period: 14
+  macd:
+    fast: 12
+    slow: 26
+    signal: 9
+  bollinger_bands:
+    window: 20
+    num_std: 2
+  atr_period: 14
+  momentum_windows: [5, 10, 20, 60]
+  volume_ma_windows: [5, 20]
+
+# Train / validation / test split
+# Walk-forward: retrain every `retrain_every_n_days` days
+train_years: 4
+validation_years: 1
+test_years: 1
+retrain_every_n_days: 63       # ~1 quarter
+
+# Model
+model:
+  type: "lightgbm"             # lightgbm | xgboost | baseline_ma | baseline_rsi
+  random_seed: 42
+
+# Output paths (relative to project root)
+paths:
+  raw_data:    "data/raw"
+  processed:   "data/processed"
+  external:    "data/external"
+  reports:     "reports"
+  figures:     "reports/figures"
+  backtests:   "reports/backtests"
+  experiments: "reports/experiments"

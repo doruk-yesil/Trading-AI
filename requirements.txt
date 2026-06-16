@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────
+# Trading-AI  |  Requirements
+# Python >= 3.10 recommended
+# ─────────────────────────────────────────────
+
+# Core data
+pandas>=2.0
+numpy>=1.26
+pyarrow>=14.0         # fast parquet I/O
+
+# Config
+pyyaml>=6.0
+
+# Technical indicators
+ta>=0.11              # pandas-based TA library
+
+# Machine learning
+scikit-learn>=1.4
+lightgbm>=4.3
+xgboost>=2.0
+
+# Backtesting / evaluation
+# (custom engine in src/backtest — no heavy framework yet)
+
+# Visualization
+matplotlib>=3.8
+seaborn>=0.13
+
+# Utilities
+tqdm>=4.66            # progress bars
+python-dotenv>=1.0    # .env support if needed
+
+# Optional GPU — only needed if you use PyTorch later
+# torch>=2.2           # uncomment when adding deep learning
+# Install separately: pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+# Dev / notebook
+jupyter>=1.0
+ipykernel>=6.0
