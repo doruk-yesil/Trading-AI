@@ -36,6 +36,7 @@ REQUIRED_PACKAGES = [
     ("pandas",      "pandas"),
     ("numpy",       "numpy"),
     ("pyarrow",     "pyarrow"),
+    ("yfinance",    "yfinance"),
     ("yaml",        "pyyaml"),
     ("sklearn",     "scikit-learn"),
     ("lightgbm",    "lightgbm"),

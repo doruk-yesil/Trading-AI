@@ -7,6 +7,7 @@
 pandas>=2.0
 numpy>=1.26
 pyarrow>=14.0         # fast parquet I/O
+yfinance>=0.2.54      # Yahoo Finance historical data download
 
 # Config
 pyyaml>=6.0
