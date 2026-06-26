@@ -17,9 +17,13 @@ Notes:
 
 from __future__ import annotations
 
+import sys
 import argparse
 from datetime import datetime
 from pathlib import Path
+
+# Add project root to path so `src` is importable
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
 import yfinance as yf
