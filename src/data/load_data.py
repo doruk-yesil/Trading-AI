@@ -17,7 +17,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Optional
 
-from src.utils.paths import RAW_DATA_DIR
+from src.utils.paths import RAW_DATA_DIR, PROCESSED_DATA_DIR
 from src.utils.config import cfg
 
 
@@ -120,7 +120,104 @@ def load_universe(
     return universe
 
 
+def load_featured_symbol(
+    symbol: str,
+    processed_dir: Path = PROCESSED_DATA_DIR,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Load pre-built featured parquet for a single symbol from data/processed/.
+
+    These files are created by:
+        python scripts/build_features.py
+
+    Parameters
+    ----------
+    symbol : str
+        Ticker symbol, e.g. "AAPL"
+    processed_dir : Path
+        Directory containing *_featured.parquet files.
+    start_date / end_date : str, optional
+        Date filter (YYYY-MM-DD).
+
+    Returns
+    -------
+    pd.DataFrame
+        173 feature columns + date, symbol, OHLCV, forward_return_5d, target.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the featured file doesn't exist yet (run build_features.py first).
+    """
+    path = processed_dir / f"{symbol}_featured.parquet"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Featured file not found: {path}\n"
+            f"Run:  python scripts/build_features.py --symbols {symbol}"
+        )
+
+    df = pd.read_parquet(path)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").reset_index(drop=True)
+
+    if start_date:
+        df = df[df["date"] >= start_date]
+    if end_date:
+        df = df[df["date"] <= end_date]
+
+    return df
+
+
+def load_featured_universe(
+    symbols: Optional[list] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    concat: bool = False,
+) -> "dict[str, pd.DataFrame] | pd.DataFrame":
+    """
+    Load featured DataFrames for all symbols.
+
+    Parameters
+    ----------
+    symbols : list, optional
+        Defaults to config universe.
+    start_date / end_date : str, optional
+        Date filter applied to each symbol.
+    concat : bool
+        If True, return a single concatenated DataFrame (all symbols stacked).
+        If False (default), return a dict {symbol: DataFrame}.
+
+    Returns
+    -------
+    dict or pd.DataFrame
+    """
+    if symbols is None:
+        symbols = cfg["symbols"]
+
+    universe = {}
+    for sym in symbols:
+        try:
+            universe[sym] = load_featured_symbol(
+                sym, start_date=start_date, end_date=end_date
+            )
+            df = universe[sym]
+            labeled = int(df["target"].notna().sum()) if "target" in df.columns else 0
+            print(f"  Loaded {sym}: {len(df)} rows, {labeled} labeled")
+        except FileNotFoundError as e:
+            print(f"  WARNING: {e}")
+
+    if concat and universe:
+        return pd.concat(universe.values(), ignore_index=True)
+
+    return universe
+
+
 if __name__ == "__main__":
     # Quick smoke test — will show warnings until data is present
     data = load_universe()
-    print(f"\nLoaded {len(data)} symbols.")
+    print(f"\nLoaded {len(data)} raw symbols.")
+
+    featured = load_featured_universe()
+    print(f"Loaded {len(featured)} featured symbols.")

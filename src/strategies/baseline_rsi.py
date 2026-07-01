@@ -16,7 +16,7 @@ on liquid large-cap stocks without additional filters.
 import pandas as pd
 from typing import Optional
 
-from src.features.technical_indicators import add_rsi
+from src.features.technical_indicators import add_rsi  # shim — kept for fallback
 
 
 def rsi_signals(
@@ -31,21 +31,26 @@ def rsi_signals(
     Parameters
     ----------
     df : pd.DataFrame
-        OHLCV DataFrame (will compute RSI if not already present).
+        Featured DataFrame. If 'rsi_14' column exists (from generate_ohlcv_features)
+        it is used directly. Falls back to computing RSI on the fly if absent.
     oversold : float
         Enter long when RSI drops below this level.
     overbought : float
         Exit when RSI rises above this level.
     rsi_period : int
-        RSI look-back period.
+        RSI look-back period (used only when RSI is not pre-computed).
 
     Returns
     -------
     pd.Series
         Signal series: 1 = in position, 0 = out.
     """
-    # TODO: implement when data arrives
-    if "rsi" not in df.columns:
+    df = df.copy()
+
+    # Prefer pre-computed rsi_14 from the feature pipeline
+    if "rsi_14" in df.columns:
+        df["rsi"] = df["rsi_14"]
+    elif "rsi" not in df.columns:
         df = add_rsi(df, period=rsi_period)
 
     signal = pd.Series(0, index=df.index, name="signal_rsi")
