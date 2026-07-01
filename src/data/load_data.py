@@ -19,6 +19,7 @@ from typing import Optional
 
 from src.utils.paths import RAW_DATA_DIR, PROCESSED_DATA_DIR
 from src.utils.config import cfg
+from src.utils.universe import resolve_universe
 
 
 REQUIRED_COLUMNS = {"date", "open", "high", "low", "close", "volume"}
@@ -101,13 +102,13 @@ def load_universe(
 
     Returns a dict: {symbol: DataFrame}
     Symbols that fail to load are skipped with a warning.
-    """
-    # TODO: implement when data arrives
-    if symbols is None:
-        symbols = cfg["symbols"]
 
-    start_date = start_date or cfg["start_date"]
-    end_date   = end_date   or cfg["end_date"]
+    start_date/end_date are optional filters -- left as None by default so a
+    full period="max" raw pull (see scripts/download_yahoo_finance.py) isn't
+    silently truncated to the old fixed 2015-2024 config window.
+    """
+    if symbols is None:
+        symbols = resolve_universe()
 
     universe = {}
     for sym in symbols:
@@ -194,7 +195,7 @@ def load_featured_universe(
     dict or pd.DataFrame
     """
     if symbols is None:
-        symbols = cfg["symbols"]
+        symbols = resolve_universe()
 
     universe = {}
     for sym in symbols:

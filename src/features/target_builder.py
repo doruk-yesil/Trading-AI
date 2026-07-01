@@ -81,20 +81,72 @@ def build_binary_target(
 def build_continuous_target(
     df: pd.DataFrame,
     horizon: Optional[int] = None,
-    target_col: str = "target_return",
+    target_col: str = "target",
+    clip_quantiles: Optional[tuple] = (0.01, 0.99),
 ) -> pd.DataFrame:
     """
-    Add a continuous return target for regression tasks.
+    Add a continuous forward-return target for regression.
 
-    Not used in v1 (we use binary classification), but kept for future experimentation.
+    Predicts the actual forward N-day return (as a decimal, e.g. 0.023 = +2.3%)
+    instead of a binary beat/miss flag -- gives direction + magnitude, which is
+    what a downstream position-sizing / cross-sectional ranking step needs
+    (rank all symbols by predicted return, not just P(beats threshold)).
+
+    min_return_threshold / transaction_cost are NOT applied here -- with a
+    continuous target the "is this worth trading" decision belongs in the
+    strategy layer (src/strategies/ml_signal_strategy.py), which compares the
+    predicted return against cfg["min_return_threshold"] + costs. Keeping
+    that logic out of the label keeps prediction and decision-making separate.
+
+    Parameters
+    ----------
+    clip_quantiles : (float, float) or None
+        Winsorizes extreme outliers (earnings gaps, halts, etc.) at these
+        quantiles before they hit training -- a handful of extreme return
+        days can otherwise dominate a regression loss and destabilize
+        training. Set to None to disable.
     """
-    # TODO: implement if regression approach is explored
     horizon = horizon or cfg["prediction_horizon"]
     df = df.copy()
-    df[target_col] = df["close"].pct_change(horizon).shift(-horizon)
+
+    raw_col = f"forward_return_{horizon}d"
+    df[raw_col] = df["close"].pct_change(horizon).shift(-horizon)
+    df[target_col] = df[raw_col]
+
+    if clip_quantiles is not None:
+        lo = df[target_col].quantile(clip_quantiles[0])
+        hi = df[target_col].quantile(clip_quantiles[1])
+        df[target_col] = df[target_col].clip(lower=lo, upper=hi)
+
+    # Mark last `horizon` rows as NaN (no future data available)
     df.loc[df.index[-horizon:], target_col] = np.nan
+    df.loc[df.index[-horizon:], raw_col] = np.nan
+
     return df
 
 
+def build_target(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    """
+    Dispatches to build_binary_target or build_continuous_target based on
+    configs/config.yaml -> target_type. Callers should use this instead of
+    hardcoding one or the other, so switching target_type is a one-line
+    config change, not a code change in every caller.
+    """
+    target_type = cfg.get("target_type", "binary")
+    if target_type == "binary":
+        return build_binary_target(df, **kwargs)
+    elif target_type == "continuous":
+        # build_binary_target-style kwargs that build_continuous_target
+        # doesn't use (it's threshold-free by design -- see docstring above).
+        kwargs.pop("min_threshold", None)
+        kwargs.pop("transaction_cost", None)
+        return build_continuous_target(df, **kwargs)
+    else:
+        raise ValueError(
+            f"Unknown target_type: {target_type!r} (expected 'binary' or 'continuous')"
+        )
+
+
 if __name__ == "__main__":
-    print("target_builder.py — call build_binary_target(df) after loading data.")
+    print("target_builder.py — call build_target(df) after loading data "
+          "(dispatches based on configs/config.yaml -> target_type).")

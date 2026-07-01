@@ -8,6 +8,8 @@ pandas>=2.0
 numpy>=1.26
 pyarrow>=14.0         # fast parquet I/O
 yfinance>=0.2.54      # Yahoo Finance historical data download
+lxml>=5.0             # required by pandas.read_html (src/utils/universe.py, S&P 500 fetch)
+requests>=2.31        # S&P 500 fetch needs a real User-Agent header (Wikipedia 403s urllib's default)
 
 # Config
 pyyaml>=6.0

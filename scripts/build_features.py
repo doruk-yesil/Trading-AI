@@ -17,8 +17,10 @@ Output
 ------
   data/processed/{SYMBOL}_featured.parquet
     Columns: date, symbol, open, high, low, close, volume,
-             <173 feature columns>,
-             forward_return_5d, target
+             <feature columns>,
+             forward_return_{horizon}d, target
+    'target' is binary (0/1) or continuous (decimal return) depending on
+    configs/config.yaml -> target_type. See src/features/target_builder.py.
 
 Usage
 -----
@@ -45,8 +47,9 @@ import pandas as pd
 
 from src.utils.config import cfg
 from src.utils.paths import RAW_DATA_DIR, PROCESSED_DATA_DIR, ensure_dirs
+from src.utils.universe import resolve_universe
 from src.features.technical_indicators import generate_ohlcv_features
-from src.features.target_builder import build_binary_target
+from src.features.target_builder import build_target
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -121,8 +124,9 @@ def build_one_symbol(
     featured = generate_ohlcv_features(raw)
 
     # ── Target ────────────────────────────────────────────────────────────────
+    # Dispatches to binary or continuous based on configs/config.yaml -> target_type.
     if add_target:
-        featured = build_binary_target(
+        featured = build_target(
             featured,
             horizon=horizon,
             min_threshold=threshold,
@@ -149,7 +153,7 @@ def build_one_symbol(
 
 def main() -> None:
     args    = parse_args()
-    symbols = args.symbols or cfg["symbols"]
+    symbols = resolve_universe(override_symbols=args.symbols)
     horizon   = args.horizon   or cfg["prediction_horizon"]
     threshold = args.threshold or cfg["min_return_threshold"]
     raw_dir   = Path(args.raw_dir)

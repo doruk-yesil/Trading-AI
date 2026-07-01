@@ -19,13 +19,22 @@ Run:
   python src/main.py --mode backtest --model lightgbm
 """
 
+import sys
 import argparse
 import json
 from pathlib import Path
 from datetime import datetime
 
+# Add project root to path so `src` is importable when this file is run
+# directly (e.g. `python src/main.py`), matching how scripts/*.py already
+# bootstrap themselves. Without this, Python sets sys.path[0] to `src/`
+# itself (not the project root), so `from src.utils...` fails with
+# "ModuleNotFoundError: No module named 'src'".
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from src.utils.paths import ensure_dirs, EXPERIMENTS_DIR
 from src.utils.config import cfg
+from src.utils.universe import resolve_universe
 
 
 def parse_args():
@@ -67,7 +76,7 @@ def run_pipeline(args):
 
     ensure_dirs()
 
-    symbols = args.symbols or cfg["symbols"]
+    symbols = resolve_universe(override_symbols=args.symbols)
     print(f"\nTrading-AI Pipeline")
     print(f"  Symbols:    {symbols}")
     print(f"  Date range: {cfg['start_date']} → {cfg['end_date']}")
@@ -105,11 +114,11 @@ def run_pipeline(args):
     if args.mode in ("all", "features", "train", "backtest"):
         print("Stage 4: Building features and targets...")
         from src.features.technical_indicators import build_all_features
-        from src.features.target_builder import build_binary_target
+        from src.features.target_builder import build_target
         featured = {}
         for sym, df in universe.items():
             df = build_all_features(df)
-            df = build_binary_target(df)
+            df = build_target(df)
             featured[sym] = df
             print(f"  {sym}: {len(df.columns)} columns, {df['target'].notna().sum()} labelled rows")
         print()

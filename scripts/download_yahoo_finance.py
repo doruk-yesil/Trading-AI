@@ -1,8 +1,20 @@
 """
 download_yahoo_finance.py
 -------------------------
-Download historical OHLCV data from Yahoo Finance and store one file per symbol
-in data/raw/ as Parquet.
+Download historical daily OHLCV data from Yahoo Finance and store one file
+per symbol in data/raw/ as Parquet. Overwrites existing files so the raw
+dataset always reflects the latest full pull (reproducible, not append-only).
+
+Universe: resolved via src/utils/universe.py. Default (configs/config.yaml
+universe_mode: "sp500") pulls the *current* full S&P 500 constituent list
+plus always-include extras (SPY benchmark). Pass --symbols to override with
+a small manual list for quick tests.
+
+History depth: defaults to period="max" (the earliest history Yahoo has for
+each symbol), not a fixed start/end date -- so newer/older listings each get
+as much history as actually exists. Pass --start-date/--end-date to instead
+pull a fixed window (period and start/end are mutually exclusive on Yahoo's
+API, so passing dates switches the script out of "max" mode automatically).
 
 Examples:
   python scripts/download_yahoo_finance.py
@@ -10,14 +22,15 @@ Examples:
   python scripts/download_yahoo_finance.py --start-date 2018-01-01 --end-date 2024-12-31
 
 Notes:
-  - Uses the symbols from configs/config.yaml by default.
   - Stores normalized columns: date, open, high, low, close, volume.
   - Existing files are overwritten so the raw dataset stays reproducible.
+  - Run via scripts/daily_refresh.py for the full daily+hourly+features cycle.
 """
 
 from __future__ import annotations
 
 import sys
+import time
 import argparse
 from datetime import datetime
 from pathlib import Path
@@ -28,32 +41,41 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pandas as pd
 import yfinance as yf
 
-from src.utils.config import cfg
 from src.utils.paths import RAW_DATA_DIR, ensure_dirs
+from src.utils.universe import resolve_universe
+
+MAX_RETRIES = 3
+RETRY_BACKOFF_SECONDS = 3
+INTER_SYMBOL_SLEEP_SECONDS = 0.3  # be polite to Yahoo across a large (500+) universe
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Download Yahoo Finance OHLCV data")
+    parser = argparse.ArgumentParser(description="Download Yahoo Finance daily OHLCV data")
     parser.add_argument(
         "--symbols",
         nargs="+",
         default=None,
-        help="Tickers to download. Defaults to the configured universe.",
+        help="Tickers to download. Overrides universe_mode entirely (e.g. quick tests).",
+    )
+    parser.add_argument(
+        "--period",
+        default="max",
+        help="Yahoo Finance period (e.g. max, 10y, 5y). Ignored if --start-date is given.",
     )
     parser.add_argument(
         "--start-date",
-        default=cfg["start_date"],
-        help="Start date in YYYY-MM-DD format.",
+        default=None,
+        help="Start date YYYY-MM-DD. If given (with --end-date), overrides --period.",
     )
     parser.add_argument(
         "--end-date",
-        default=cfg["end_date"],
-        help="End date in YYYY-MM-DD format.",
+        default=None,
+        help="End date YYYY-MM-DD. If given (with --start-date), overrides --period.",
     )
     parser.add_argument(
         "--interval",
         default="1d",
-        help="Yahoo Finance interval, e.g. 1d, 1h, 1wk.",
+        help="Yahoo Finance interval, e.g. 1d, 1wk.",
     )
     parser.add_argument(
         "--raw-dir",
@@ -107,24 +129,45 @@ def normalize_history(history: pd.DataFrame) -> pd.DataFrame:
 
 def download_symbol(
     symbol: str,
-    start_date: str,
-    end_date: str,
+    period: str,
+    start_date: str | None,
+    end_date: str | None,
     interval: str,
     auto_adjust: bool,
     raw_dir: Path,
-) -> tuple[Path, int]:
-    history = yf.Ticker(symbol).history(
-        start=start_date,
-        end=end_date,
-        interval=interval,
-        auto_adjust=auto_adjust,
-        actions=False,
-    )
-    normalized = normalize_history(history)
+) -> tuple[Path, int, str, str]:
+    """Download + normalize + save one symbol. Retries transient failures."""
+    last_exc: Exception | None = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            ticker = yf.Ticker(symbol)
+            if start_date and end_date:
+                history = ticker.history(
+                    start=start_date,
+                    end=end_date,
+                    interval=interval,
+                    auto_adjust=auto_adjust,
+                    actions=False,
+                )
+            else:
+                history = ticker.history(
+                    period=period,
+                    interval=interval,
+                    auto_adjust=auto_adjust,
+                    actions=False,
+                )
+            normalized = normalize_history(history)
 
-    out_path = raw_dir / f"{sanitize_symbol(symbol)}.parquet"
-    normalized.to_parquet(out_path, index=False)
-    return out_path, len(normalized)
+            out_path = raw_dir / f"{sanitize_symbol(symbol)}.parquet"
+            normalized.to_parquet(out_path, index=False)
+            earliest = normalized["date"].min().strftime("%Y-%m-%d")
+            latest = normalized["date"].max().strftime("%Y-%m-%d")
+            return out_path, len(normalized), earliest, latest
+        except Exception as exc:
+            last_exc = exc
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+    raise last_exc  # type: ignore[misc]
 
 
 def main() -> None:
@@ -134,20 +177,27 @@ def main() -> None:
     raw_dir = Path(args.raw_dir)
     raw_dir.mkdir(parents=True, exist_ok=True)
 
-    symbols = args.symbols or cfg["symbols"]
+    symbols = resolve_universe(override_symbols=args.symbols)
     auto_adjust = not args.no_auto_adjust
+    using_fixed_range = bool(args.start_date and args.end_date)
 
     manifest_rows = []
-    print("Yahoo Finance download starting...")
-    print(f"  Symbols: {symbols}")
-    print(f"  Date range: {args.start_date} -> {args.end_date}")
+    print("Yahoo Finance daily download starting...")
+    print(f"  Universe size: {len(symbols)} symbols")
+    if using_fixed_range:
+        print(f"  Date range: {args.start_date} -> {args.end_date} (fixed window)")
+    else:
+        print(f"  Period: {args.period} (max available history per symbol)")
     print(f"  Interval: {args.interval}")
     print(f"  Output dir: {raw_dir}")
+    print()
 
-    for symbol in symbols:
+    n_ok, n_failed = 0, 0
+    for i, symbol in enumerate(symbols, start=1):
         try:
-            out_path, row_count = download_symbol(
+            out_path, row_count, earliest, latest = download_symbol(
                 symbol=symbol,
+                period=args.period,
                 start_date=args.start_date,
                 end_date=args.end_date,
                 interval=args.interval,
@@ -159,16 +209,20 @@ def main() -> None:
                     "symbol": symbol,
                     "file": out_path.name,
                     "rows": row_count,
-                    "start_date": args.start_date,
-                    "end_date": args.end_date,
+                    "earliest_date": earliest,
+                    "latest_date": latest,
                     "interval": args.interval,
                     "auto_adjust": auto_adjust,
                     "downloaded_at": datetime.now().isoformat(timespec="seconds"),
                 }
             )
-            print(f"  Saved {symbol} -> {out_path} ({row_count} rows)")
+            n_ok += 1
+            print(f"  [{i}/{len(symbols)}] Saved {symbol} -> {out_path.name} "
+                  f"({row_count} rows, {earliest} -> {latest})")
         except Exception as exc:
-            print(f"  Failed {symbol}: {exc}")
+            n_failed += 1
+            print(f"  [{i}/{len(symbols)}] FAILED {symbol}: {exc}")
+        time.sleep(INTER_SYMBOL_SLEEP_SECONDS)
 
     if manifest_rows:
         manifest = pd.DataFrame(manifest_rows)
@@ -176,7 +230,7 @@ def main() -> None:
         manifest.to_csv(manifest_path, index=False)
         print(f"\nManifest saved -> {manifest_path}")
 
-    print("Download complete.")
+    print(f"\nDownload complete. {n_ok} succeeded, {n_failed} failed out of {len(symbols)}.")
 
 
 if __name__ == "__main__":

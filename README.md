@@ -23,9 +23,22 @@ Build a rigorous, reproducible pipeline that:
 
 ## Current Status
 
-**Phase 0 — Structure complete, awaiting data.**
+**Phase 1 — Data pipeline automated, baselines/ML not yet run.**
 
-The full pipeline skeleton is in place. Once historical data files are added to `data/raw/`, all stages can run end-to-end.
+Daily OHLCV data collection is live (İlke's original `scripts/download_yahoo_finance.py`,
+now extended). `data/raw/` and `data/processed/` are populated end-to-end. As of
+2026-07-02 the universe was expanded from a fixed 8-symbol list to the full
+S&P 500 (fetched live at runtime, see `src/utils/universe.py`), pulling max
+available history per symbol instead of a fixed 2015-2024 window. A daily
+automated refresh (`scripts/daily_refresh.py`) re-downloads daily data,
+accumulates hourly bars into a separate `data/hourly/` archive for future
+use, and rebuilds `data/processed/*_featured.parquet` -- see "Automated
+Daily Refresh" below to schedule it.
+
+Note: the current 173-column feature set and 5-day binary target are
+placeholders (mock) and expected to be redefined -- this doesn't block the
+data pipeline, which regenerates whatever `build_features.py` currently
+produces regardless of how the feature/target definitions change later.
 
 See `scripts/data_format_guide.md` for the exact data format your data collection teammate should deliver.
 
@@ -34,7 +47,7 @@ See `scripts/data_format_guide.md` for the exact data format your data collectio
 ## Staged Roadmap
 
 ### Phase 1 — Data & Baselines (current)
-- [ ] Collect historical OHLCV data for 7 US stocks + SPY benchmark
+- [x] Collect historical OHLCV data for the S&P 500 universe + SPY benchmark (automated daily)
 - [ ] Validate and preprocess data
 - [ ] Build all technical features
 - [ ] Run and evaluate MA crossover and RSI baseline strategies
@@ -151,6 +164,45 @@ python src/main.py --mode train --model baseline_ma
 # Full pipeline on a subset of symbols
 python src/main.py --mode all --symbols AAPL MSFT SPY
 ```
+
+---
+
+## Automated Daily Refresh
+
+`scripts/daily_refresh.py` runs the full data cycle in one go:
+
+1. `scripts/download_yahoo_finance.py` -- re-downloads daily OHLCV for the
+   whole universe (S&P 500 + SPY), overwriting `data/raw/` with max
+   available history per symbol.
+2. `scripts/download_hourly_data.py` -- accumulates 1h bars into a separate
+   `data/hourly/` archive (merges + de-dupes on top of what's already
+   saved, since Yahoo only serves a rolling ~730-day window for hourly
+   data). Not used by the current pipeline -- pure archival for later.
+3. `scripts/build_features.py` -- rebuilds `data/processed/*_featured.parquet`
+   from the fresh daily data.
+
+Run it manually any time:
+```bash
+python scripts/daily_refresh.py
+python scripts/daily_refresh.py --symbols AAPL MSFT SPY   # quick test on a few symbols
+```
+
+### Scheduling it (Windows Task Scheduler)
+
+This needs to run somewhere with real internet access to Yahoo Finance --
+your own machine (where `venv` already works), not a sandboxed environment.
+One-time setup, run once in Command Prompt (adjust the time -- e.g. after US
+market close in your timezone):
+
+```cmd
+schtasks /create /sc daily /tn "TradingAI-DailyRefresh" ^
+  /tr "C:\Users\doruk\Desktop\AI-Project\Trading-AI\scripts\run_daily_refresh.bat" ^
+  /st 23:30
+```
+
+Check it ran: `reports/refresh_logs/refresh_<timestamp>.log` (structured
+summary) and `reports/refresh_logs/bat_output.log` (raw console output).
+Remove it later with `schtasks /delete /tn "TradingAI-DailyRefresh" /f`.
 
 ---
 

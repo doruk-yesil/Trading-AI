@@ -3,26 +3,41 @@
 # ─────────────────────────────────────────────
 
 # Universe
+# universe_mode: "sp500"  -> fetch the live S&P 500 constituent list at runtime
+#                            (see src/utils/universe.py). `symbols` below is
+#                            then just the always-include extras (benchmark etc).
+# universe_mode: "manual" -> use exactly the `symbols` list below.
+universe_mode: "sp500"
+
 symbols:
-  - AAPL
-  - MSFT
-  - GOOGL
-  - AMZN
-  - NVDA
-  - META
-  - JPM
-  - SPY        # benchmark — always include
+  - SPY        # benchmark — always include, not a real S&P 500 constituent
 
 benchmark: SPY
 
 # Date range (YYYY-MM-DD)
+# Used only as an optional override / filter. The daily downloader defaults to
+# period="max" (earliest available history per symbol) unless these are
+# explicitly passed on the CLI.
 start_date: "2015-01-01"
 end_date:   "2024-12-31"
 
 # Prediction target
-prediction_horizon: 5          # trading days forward
-min_return_threshold: 0.005    # 0.5% — must beat this + transaction cost to be label=1
-target_type: "binary"          # binary | continuous
+# Horizon: matches Doruk's own discretionary swing style (~10-20 trading days).
+# 15 chosen as the midpoint -- long enough that daily noise/transaction costs
+# don't dominate, short enough to stay responsive. Worth A/B testing 10 vs 15
+# vs 20 empirically (walk-forward) once training is implemented -- don't just
+# trust this number blindly.
+prediction_horizon: 15          # trading days forward
+
+# target_type: "continuous" -> model predicts the actual forward return (%),
+# not just a beat/miss flag. Chosen so the output is directly usable for
+# position sizing / ranking across the full S&P 500 universe (504 symbols),
+# not just a threshold-crossing probability.
+# min_return_threshold still matters -- it's applied downstream (in the
+# decision/strategy layer, e.g. src/strategies/ml_signal_strategy.py) as the
+# minimum predicted edge required to actually trade, not baked into the label.
+target_type: "continuous"       # binary | continuous
+min_return_threshold: 0.005     # 0.5% — min predicted edge (net of costs) to act on a signal
 
 # Transaction costs
 transaction_cost_pct: 0.001    # 0.10% per trade (one-way)
