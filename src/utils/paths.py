@@ -28,6 +28,7 @@ REPORTS_DIR     = ROOT / "reports"
 FIGURES_DIR     = ROOT / "reports" / "figures"
 BACKTESTS_DIR   = ROOT / "reports" / "backtests"
 EXPERIMENTS_DIR = ROOT / "reports" / "experiments"
+MODELS_DIR      = ROOT / "reports" / "models"   # trained model artifacts, one subfolder per training run
 
 # ── Config ────────────────────────────────────────────────────────────────────
 CONFIGS_DIR  = ROOT / "configs"
@@ -47,6 +48,7 @@ def ensure_dirs() -> None:
         FIGURES_DIR,
         BACKTESTS_DIR,
         EXPERIMENTS_DIR,
+        MODELS_DIR,
     ]
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)

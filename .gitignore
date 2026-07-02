@@ -12,6 +12,7 @@ reports/refresh_logs/
 reports/figures/
 reports/backtests/
 reports/experiments/
+reports/models/
 
 # Python
 __pycache__/
