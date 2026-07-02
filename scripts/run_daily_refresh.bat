@@ -12,6 +12,11 @@ REM ("Automated Daily Refresh" section) for the exact schtasks command.
 setlocal
 cd /d "%~dp0.."
 
+REM Force UTF-8 so console-symbol prints don't crash once stdout is
+REM redirected to a log file instead of a real console (see daily_refresh.py).
+set PYTHONIOENCODING=utf-8
+set PYTHONUTF8=1
+
 if exist "venv\Scripts\python.exe" (
     set "PYTHON_EXE=venv\Scripts\python.exe"
 ) else (

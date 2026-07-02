@@ -194,7 +194,7 @@ def main() -> None:
                 if not args.no_target else ""
             )
             print(
-                f"  ✓  {sym:<6}  "
+                f"  OK    {sym:<6}  "
                 f"rows={summary['total_rows']:<5}  "
                 f"features={summary['n_features']:<4}"
                 f"{label_info}  "
@@ -202,7 +202,7 @@ def main() -> None:
             )
         except Exception as exc:
             failures.append((sym, str(exc)))
-            print(f"  ✗  {sym:<6}  FAILED: {exc}")
+            print(f"  FAIL  {sym:<6}  FAILED: {exc}")
 
     print()
     print(f"  Done.  {len(results)} succeeded, {len(failures)} failed.")

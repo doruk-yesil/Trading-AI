@@ -21,6 +21,7 @@ ta>=0.11              # pandas-based TA library
 scikit-learn>=1.4
 lightgbm>=4.3
 xgboost>=2.0
+scipy>=1.11            # spearmanr / Information Coefficient (src/models/evaluate_model.py)
 
 # Backtesting / evaluation
 # (custom engine in src/backtest — no heavy framework yet)

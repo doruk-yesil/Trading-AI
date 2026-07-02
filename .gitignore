@@ -2,6 +2,11 @@
 data/raw/
 data/processed/
 data/external/
+data/hourly/
+
+# Generated caches / logs — regenerated automatically, not source
+configs/sp500_constituents_cache.csv
+reports/refresh_logs/
 
 # Reports output — generated, not source
 reports/figures/
