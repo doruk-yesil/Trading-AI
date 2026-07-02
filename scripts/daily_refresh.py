@@ -55,7 +55,14 @@ LOG_DIR = REPORTS_DIR / "refresh_logs"
 # non-ASCII character (e.g. build_features.py's old checkmark symbols). Same
 # risk applies when this script itself is run non-interactively (Task
 # Scheduler, output redirected to a file) -- see run_daily_refresh.bat.
-CHILD_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+#
+# PYTHONUNBUFFERED=1 matters separately: when a child's stdout is a pipe
+# (not a real terminal), Python block-buffers it by default, so print()
+# calls don't actually reach us until the buffer fills or the process exits.
+# For a 504-symbol download that takes minutes, that looks exactly like a
+# frozen terminal -- nothing prints until the whole stage is done. This
+# forces the child to flush every line immediately instead.
+CHILD_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,18 +75,34 @@ def parse_args() -> argparse.Namespace:
 
 
 def run_stage(name: str, cmd: list[str]) -> tuple[bool, str]:
+    """
+    Runs a stage and streams its output LIVE, line by line, instead of
+    buffering everything until the subprocess exits. A plain
+    subprocess.run(capture_output=True) waits for the whole stage (minutes,
+    for a 504-symbol download) before printing a single character -- looks
+    exactly like a hung terminal even though it's working fine in the
+    background. Popen + reading stdout line-by-line as it arrives fixes that.
+    """
     print("=" * 70)
     print(f"  STAGE: {name}")
     print("=" * 70)
-    result = subprocess.run(
-        cmd, cwd=str(ROOT), capture_output=True, text=True,
-        encoding="utf-8", errors="replace", env=CHILD_ENV,
+
+    process = subprocess.Popen(
+        cmd, cwd=str(ROOT),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
+        env=CHILD_ENV, bufsize=1,
     )
-    print(result.stdout)
-    combined_output = result.stdout + result.stderr
-    if result.returncode != 0:
-        print(result.stderr)
-        print(f"  FAIL  {name} (exit code {result.returncode})\n")
+
+    output_lines: list[str] = []
+    for line in process.stdout:
+        print(line, end="")
+        output_lines.append(line)
+    process.wait()
+
+    combined_output = "".join(output_lines)
+    if process.returncode != 0:
+        print(f"  FAIL  {name} (exit code {process.returncode})\n")
         return False, combined_output
     print(f"  OK    {name} complete\n")
     return True, combined_output

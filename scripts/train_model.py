@@ -49,7 +49,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import joblib
 import pandas as pd
 
 from src.utils.config import cfg
@@ -58,6 +57,7 @@ from src.utils.universe import resolve_universe
 from src.data.load_data import load_featured_universe
 from src.models.train_baseline_models import train_and_evaluate, prepare_features
 from src.models.train_xgboost import train_lightgbm, train_xgboost
+from src.models.model_io import save_model_bundle
 
 ALL_MODELS = ["linear", "random_forest", "lightgbm", "xgboost"]
 
@@ -176,10 +176,14 @@ def main() -> None:
             val_metrics = result.get("val_metrics", {})
             test_metrics = result.get("test_metrics", {})
 
-        # Persist the trained model object itself -- joblib handles sklearn
-        # Pipelines, LightGBM Boosters, and XGBoost sklearn wrappers uniformly.
+        # Persist model + exact feature_cols list/order + metadata as one
+        # self-contained bundle -- see src/models/model_io.py for why this
+        # matters (predict.py must never guess the feature list).
         model_path = run_model_dir / f"{name}.joblib"
-        joblib.dump(model, model_path)
+        save_model_bundle(
+            model, feature_cols, model_path,
+            model_type=name, device_used=result.get("device_used", "cpu"),
+        )
 
         comparison[name] = {
             "val": val_metrics,
