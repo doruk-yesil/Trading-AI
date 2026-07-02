@@ -32,7 +32,9 @@ import pandas as pd
 import numpy as np
 from typing import Optional
 
-from src.models.train_baseline_models import get_feature_columns, time_split, prepare_features
+from src.models.train_baseline_models import (
+    get_feature_columns, time_split, prepare_features, compute_uniqueness_weights,
+)
 from src.utils.config import cfg
 
 IS_CONTINUOUS = cfg.get("target_type", "binary") == "continuous"
@@ -42,6 +44,7 @@ def train_lightgbm(
     df: pd.DataFrame,
     target_col: str = "target",
     use_gpu: bool = True,
+    splits: Optional[tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]] = None,
 ) -> dict:
     """
     Train a LightGBM model -- regression or binary classification depending
@@ -51,6 +54,7 @@ def train_lightgbm(
     ----------
     df : pd.DataFrame
         Pooled feature + target DataFrame (see load_featured_universe(concat=True)).
+        Ignored when `splits` is given.
     target_col : str
         Target column name.
     use_gpu : bool
@@ -62,6 +66,12 @@ def train_lightgbm(
         build and isn't guaranteed just because a GPU is present). Each
         attempt is printed clearly so it's never silently running on CPU
         without you knowing.
+    splits : (train_df, val_df, test_df), optional
+        Pre-computed splits to use instead of deriving them via time_split().
+        Used by src/models/cross_validation.py, which generates its own
+        purged k-fold splits and needs each fold trained identically to how
+        scripts/train_model.py trains the "real" model, without duplicating
+        the LightGBM training logic in two places.
 
     Returns
     -------
@@ -74,14 +84,24 @@ def train_lightgbm(
     except ImportError:
         raise ImportError("LightGBM not installed. Run: pip install lightgbm")
 
-    df_clean      = df.dropna(subset=[target_col])
-    feature_cols  = get_feature_columns(df_clean, target_col)
-    train_df, val_df, test_df = time_split(df_clean)
+    if splits is not None:
+        train_df, val_df, test_df = splits
+        feature_cols = get_feature_columns(train_df, target_col)
+    else:
+        df_clean      = df.dropna(subset=[target_col])
+        feature_cols  = get_feature_columns(df_clean, target_col)
+        train_df, val_df, test_df = time_split(df_clean)
 
     X_train = prepare_features(train_df, feature_cols)
     y_train = train_df[target_col]
     X_val   = prepare_features(val_df, feature_cols)
     y_val   = val_df[target_col]
+
+    sample_weight = (
+        compute_uniqueness_weights(train_df).to_numpy()
+        if cfg.get("use_sample_weighting", True) and len(train_df) > 0
+        else None
+    )
 
     base_params = {
         "num_leaves":     63,
@@ -98,7 +118,7 @@ def train_lightgbm(
     else:
         base_params.update({"objective": "binary", "metric": "auc"})
 
-    dtrain = lgb.Dataset(X_train, label=y_train)
+    dtrain = lgb.Dataset(X_train, label=y_train, weight=sample_weight)
     dval   = lgb.Dataset(X_val,   label=y_val, reference=dtrain)
     callbacks = [lgb.early_stopping(stopping_rounds=50), lgb.log_evaluation(period=50)]
 
@@ -141,6 +161,7 @@ def train_xgboost(
     df: pd.DataFrame,
     target_col: str = "target",
     use_gpu: bool = True,
+    splits: Optional[tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]] = None,
 ) -> dict:
     """
     Train an XGBoost model -- regression or binary classification depending
@@ -149,7 +170,7 @@ def train_xgboost(
     Parameters
     ----------
     df : pd.DataFrame
-        Pooled feature + target DataFrame.
+        Pooled feature + target DataFrame. Ignored when `splits` is given.
     target_col : str
         Target column name.
     use_gpu : bool
@@ -159,25 +180,40 @@ def train_xgboost(
         just work if NVIDIA drivers are installed -- but falls back to CPU
         with a clear message if GPU init fails for any reason (missing
         driver, no CUDA runtime, etc.) rather than crashing the whole run.
+    splits : (train_df, val_df, test_df), optional
+        Pre-computed splits to use instead of deriving them via time_split().
+        See train_lightgbm() docstring -- same rationale, used by
+        src/models/cross_validation.py.
 
     Returns
     -------
     dict
-        {'model', 'train_df', 'val_df', 'test_df', 'feature_cols', 'device_used'}
+        {'model', 'train_df', 'val_df', 'test_df', 'feature_cols',
+         'feature_importance', 'device_used'}
     """
     try:
         import xgboost as xgb
     except ImportError:
         raise ImportError("XGBoost not installed. Run: pip install xgboost")
 
-    df_clean      = df.dropna(subset=[target_col])
-    feature_cols  = get_feature_columns(df_clean, target_col)
-    train_df, val_df, test_df = time_split(df_clean)
+    if splits is not None:
+        train_df, val_df, test_df = splits
+        feature_cols = get_feature_columns(train_df, target_col)
+    else:
+        df_clean      = df.dropna(subset=[target_col])
+        feature_cols  = get_feature_columns(df_clean, target_col)
+        train_df, val_df, test_df = time_split(df_clean)
 
     X_train = prepare_features(train_df, feature_cols)
     y_train = train_df[target_col]
     X_val   = prepare_features(val_df, feature_cols)
     y_val   = val_df[target_col]
+
+    sample_weight = (
+        compute_uniqueness_weights(train_df).to_numpy()
+        if cfg.get("use_sample_weighting", True) and len(train_df) > 0
+        else None
+    )
 
     def build_model(device: str):
         common = dict(
@@ -204,7 +240,7 @@ def train_xgboost(
         try:
             print(f"  XGBoost: attempting device='{device}'...")
             model = build_model(device)
-            model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=50)
+            model.fit(X_train, y_train, sample_weight=sample_weight, eval_set=[(X_val, y_val)], verbose=50)
             device_used = device
             print(f"  XGBoost: trained successfully on device='{device}'.")
             break
@@ -214,13 +250,16 @@ def train_xgboost(
                 raise
             print("  Falling back to CPU...")
 
+    fi = pd.Series(model.feature_importances_, index=feature_cols).sort_values(ascending=False)
+
     return {
-        "model":        model,
-        "train_df":     train_df,
-        "val_df":       val_df,
-        "test_df":      test_df,
-        "feature_cols": feature_cols,
-        "device_used":  device_used,
+        "model":              model,
+        "train_df":           train_df,
+        "val_df":             val_df,
+        "test_df":            test_df,
+        "feature_cols":       feature_cols,
+        "feature_importance": fi,
+        "device_used":        device_used,
     }
 
 

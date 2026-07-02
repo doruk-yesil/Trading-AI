@@ -18,3 +18,9 @@ python scripts/train_model.py --models xgboost lightgbm        # GBM grubu (ası
 ```
 python scripts/predict.py                    # kayıtlı en son modelle tahmin üret (train etmez)
 ```
+
+```
+python scripts/cross_validate.py              # purged k-fold CV, tüm dönemlerde tutarlılık kontrolü (gerçek paraya geçmeden önce)
+python scripts/analyze_feature_importance.py   # feature ranking + azaltma önerisi (retrain gerektirmez)
+python scripts/train_meta_model.py             # primary modelin sinyallerini filtreleyen 2. model (meta-labeling)
+```

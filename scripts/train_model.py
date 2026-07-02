@@ -21,14 +21,25 @@ Models trained (in order):
 them, or something is wrong -- that comparison is the whole point of this
 script, not just "run the fancy model in isolation".
 
+A 5th "ensemble" row is added automatically whenever 2+ models are trained in
+the same run: the plain average of their test-set predictions. Not a
+separately persisted model -- it's a derived combination of whichever models
+were trained this run (see the "members" field in the saved JSON). Averaging
+tends to reduce variance versus any single model when the underlying models
+make different kinds of errors.
+
 Evaluation: dispatches to evaluate_classifier() or evaluate_regressor() based
 on configs/config.yaml -> target_type. For target_type: "continuous" (the
 current default), the Information Coefficient (Spearman rank correlation) is
 the primary quality signal -- NOT raw R²/MAE. See src/models/evaluate_model.py.
+Every model's test-set performance is also broken down by calendar quarter
+(evaluate_by_period) -- a good aggregate IC that's concentrated in one quarter
+is a very different result from one that holds up consistently.
 
 Outputs (both saved to disk, not just printed):
   reports/experiments/train_comparison_<timestamp>.json -- val + test metrics
-      for every model, plus the path to its saved model file.
+      (aggregate and by-period) for every model + the ensemble, plus the path
+      to each model's saved file.
   reports/models/<timestamp>/{linear,random_forest,lightgbm,xgboost}.joblib
       -- the actual trained model objects (joblib -- works uniformly for
       sklearn Pipelines, LightGBM Boosters, and XGBoost's sklearn wrappers).
@@ -143,55 +154,125 @@ def main() -> None:
     print("  COMPARISON")
     print("=" * 70)
 
-    from src.models.evaluate_model import evaluate_classifier, evaluate_regressor
+    from src.models.evaluate_model import evaluate_classifier, evaluate_regressor, evaluate_by_period
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_model_dir = MODELS_DIR / timestamp
     run_model_dir.mkdir(parents=True, exist_ok=True)
 
+    def predict_for_comparison(name, model, X):
+        """Same dispatch as scripts/predict.py -- each library exposes
+        predict differently, and this needs raw predictions (not just the
+        aggregate metric) to also run the by-period breakdown below."""
+        if name == "lightgbm":
+            return model.predict(X)
+        if name == "xgboost":
+            return model.predict(X) if is_continuous else model.predict_proba(X)[:, 1]
+        return model.predict(X) if is_continuous else model.predict_proba(X)[:, 1]
+
     comparison = {}
+    test_preds_by_model: dict[str, pd.Series] = {}
+    test_df_ref, target_ref = None, None
+
     for name, result in all_results.items():
         feature_cols = result["feature_cols"]
         model = result["model"]
+        test_df = result["test_df"]
 
         # Test-set metrics (GBMs compute fresh; baselines already have theirs
-        # from train_and_evaluate -- reuse rather than recompute).
-        if name in ("lightgbm", "xgboost"):
-            test_df = result["test_df"]
-            if len(test_df) == 0:
-                test_metrics = {}
-            else:
-                X_test = prepare_features(test_df, feature_cols)
+        # from train_and_evaluate -- reuse rather than recompute the
+        # aggregate, but still need fresh predictions for the by-period
+        # breakdown, which train_and_evaluate doesn't return).
+        if len(test_df) == 0:
+            test_metrics, by_period = {}, {}
+        else:
+            X_test = prepare_features(test_df, feature_cols)
+            preds = predict_for_comparison(name, model, X_test)
+            test_preds_by_model[name] = pd.Series(preds, index=test_df.index)
+            if test_df_ref is None:
+                test_df_ref = test_df
+                target_ref = test_df["target"]
+
+            if name in ("lightgbm", "xgboost"):
                 if is_continuous:
-                    preds = model.predict(X_test)
                     test_metrics = evaluate_regressor(
                         test_df["target"], preds,
                         min_return_threshold=cfg["min_return_threshold"], label=f"{name}/test",
                     )
                 else:
-                    proba = model.predict(X_test) if name == "lightgbm" else model.predict_proba(X_test)[:, 1]
-                    test_metrics = evaluate_classifier(test_df["target"], proba, label=f"{name}/test")
-            val_metrics = {}  # GBMs use val only for early stopping, not a separate reported metric here
-        else:
-            val_metrics = result.get("val_metrics", {})
-            test_metrics = result.get("test_metrics", {})
+                    test_metrics = evaluate_classifier(test_df["target"], preds, label=f"{name}/test")
+            else:
+                test_metrics = result.get("test_metrics", {})
+
+            by_period = evaluate_by_period(
+                test_df["target"], preds, test_df["date"],
+                freq="Q", is_continuous=is_continuous, label=f"{name}/test",
+            )
+
+        # GBMs use val only for early stopping, not a separate reported metric here.
+        val_metrics = {} if name in ("lightgbm", "xgboost") else result.get("val_metrics", {})
 
         # Persist model + exact feature_cols list/order + metadata as one
         # self-contained bundle -- see src/models/model_io.py for why this
-        # matters (predict.py must never guess the feature list).
+        # matters (predict.py must never guess the feature list). GBMs also
+        # carry their feature_importance along -- scripts/analyze_feature_importance.py
+        # reads it straight from the saved bundle instead of needing a retrain.
         model_path = run_model_dir / f"{name}.joblib"
+        extra = None
+        if "feature_importance" in result:
+            extra = {"feature_importance": result["feature_importance"].to_dict()}
         save_model_bundle(
             model, feature_cols, model_path,
-            model_type=name, device_used=result.get("device_used", "cpu"),
+            model_type=name, device_used=result.get("device_used", "cpu"), extra=extra,
         )
 
         comparison[name] = {
             "val": val_metrics,
             "test": test_metrics,
+            "by_period": by_period,
             "model_path": str(model_path),
             "n_features": len(feature_cols),
             "device_used": result.get("device_used", "cpu"),
         }
+
+    # ── Ensemble: simple average of predictions across every model trained
+    #    this run (only meaningful with >= 2 models -- see --models to
+    #    control which ones participate). Averaging tends to reduce variance
+    #    versus any single model, especially when the underlying models make
+    #    different kinds of errors (linear/RF vs GBM). Not a separately
+    #    persisted model -- it's a derived combination of the ones already
+    #    saved above, recomputable at inference time by loading + averaging
+    #    the member models directly. ──
+    if len(test_preds_by_model) >= 2:
+        pred_frame = pd.concat(test_preds_by_model, axis=1).dropna()
+        if len(pred_frame) > 0:
+            ensemble_preds = pred_frame.mean(axis=1)
+            y_true_ens = target_ref.loc[pred_frame.index]
+            dates_ens = test_df_ref.loc[pred_frame.index, "date"]
+
+            print(f"\nEvaluating ensemble ({' + '.join(test_preds_by_model.keys())})...")
+            if is_continuous:
+                ensemble_test_metrics = evaluate_regressor(
+                    y_true_ens, ensemble_preds,
+                    min_return_threshold=cfg["min_return_threshold"], label="ensemble/test",
+                )
+            else:
+                ensemble_test_metrics = evaluate_classifier(y_true_ens, ensemble_preds, label="ensemble/test")
+
+            ensemble_by_period = evaluate_by_period(
+                y_true_ens, ensemble_preds, dates_ens,
+                freq="Q", is_continuous=is_continuous, label="ensemble/test",
+            )
+
+            comparison["ensemble"] = {
+                "val": {},
+                "test": ensemble_test_metrics,
+                "by_period": ensemble_by_period,
+                "model_path": None,
+                "n_features": None,
+                "device_used": None,
+                "members": list(test_preds_by_model.keys()),
+            }
 
     print("\n  Summary (test set):")
     if is_continuous:

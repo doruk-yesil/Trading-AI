@@ -156,6 +156,91 @@ def evaluate_regressor(
     return results
 
 
+def evaluate_by_period(
+    y_true: pd.Series,
+    y_pred: pd.Series,
+    dates: pd.Series,
+    freq: str = "Q",
+    is_continuous: bool = True,
+    label: str = "test",
+    min_period_size: int = 20,
+) -> dict:
+    """
+    Breaks down performance by calendar period (quarter by default -- pass
+    freq="Y" for year) instead of one aggregate number for the whole test
+    window.
+
+    Why this matters: a single aggregate IC over a 1-2 year test window can
+    hide the fact that the model only worked during one calm stretch and was
+    flat or negative everywhere else. Before trusting a model, you want to
+    see whether its edge is broadly consistent across regimes (different
+    volatility environments, bull/bear periods) or concentrated in one lucky
+    quarter. This is the reporting counterpart to
+    src/models/cross_validation.py's purged k-fold CV: that checks
+    consistency across separately-TRAINED models; this checks consistency
+    within a single already-trained model's test-set predictions over time.
+
+    Periods with fewer than `min_period_size` rows are skipped -- too few
+    observations for a rank correlation / AUC to mean anything.
+
+    Returns
+    -------
+    dict
+        {'periods': {period_label: metrics_dict, ...}, 'summary': {...}}
+        summary holds mean/std/min/max of the primary metric (IC for
+        continuous targets, AUC for binary) across scored periods.
+    """
+    period = pd.PeriodIndex(pd.to_datetime(dates), freq=freq).astype(str)
+    frame = pd.DataFrame({"y_true": np.asarray(y_true), "y_pred": np.asarray(y_pred), "period": period})
+
+    by_period = {}
+    primary_values = []
+    primary_name = "information_coefficient" if is_continuous else "auc"
+
+    for period_label, group in frame.groupby("period"):
+        if len(group) < min_period_size:
+            continue
+        if is_continuous:
+            ic, _ = spearmanr(group["y_true"], group["y_pred"])
+            direction_match = np.sign(group["y_true"]) == np.sign(group["y_pred"])
+            metrics = {
+                "n": int(len(group)),
+                "information_coefficient": round(float(ic), 4) if not np.isnan(ic) else None,
+                "directional_accuracy": round(float(direction_match.mean()), 4),
+            }
+            primary_val = metrics["information_coefficient"]
+        else:
+            try:
+                auc_val = roc_auc_score(group["y_true"], group["y_pred"])
+            except ValueError:
+                auc_val = None  # single-class period -- AUC undefined
+            metrics = {"n": int(len(group)), "auc": round(float(auc_val), 4) if auc_val is not None else None}
+            primary_val = metrics["auc"]
+
+        by_period[period_label] = metrics
+        if primary_val is not None:
+            primary_values.append(primary_val)
+
+    summary = {
+        "n_periods_scored": len(primary_values),
+        f"{primary_name}_mean": round(float(np.mean(primary_values)), 4) if primary_values else None,
+        f"{primary_name}_std": round(float(np.std(primary_values)), 4) if primary_values else None,
+        f"{primary_name}_min": round(float(np.min(primary_values)), 4) if primary_values else None,
+        f"{primary_name}_max": round(float(np.max(primary_values)), 4) if primary_values else None,
+    }
+
+    print(f"\n── {label} by-period ({freq}) breakdown ──")
+    print(f"  {'period':<10} {'n':>8} {primary_name:>12}")
+    for period_label, m in by_period.items():
+        val = m.get(primary_name)
+        print(f"  {period_label:<10} {m['n']:>8} {val if val is not None else 'n/a':>12}")
+    print(f"  -- {primary_name} across periods: mean={summary[f'{primary_name}_mean']} "
+          f"std={summary[f'{primary_name}_std']} min={summary[f'{primary_name}_min']} "
+          f"max={summary[f'{primary_name}_max']} ({summary['n_periods_scored']} periods scored)")
+
+    return {"periods": by_period, "summary": summary}
+
+
 def get_regression_predictions(
     model,
     df: pd.DataFrame,

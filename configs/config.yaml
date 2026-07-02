@@ -70,6 +70,15 @@ validation_years: 1
 test_years: 1
 retrain_every_n_days: 63       # ~1 quarter
 
+# Sample uniqueness weighting (Lopez de Prado, "Advances in Financial Machine
+# Learning"). Each row's label window (forward_return_{horizon}d) overlaps
+# with its neighbors' -- every "event" isn't an independent sample the way
+# i.i.d. training data assumes. Rows whose label windows overlap heavily with
+# many others get down-weighted; rows near the edges of a symbol's history
+# (less overlap) get up-weighted closer to 1. See
+# src/models/train_baseline_models.py -> compute_uniqueness_weights().
+use_sample_weighting: true
+
 # Model
 model:
   type: "lightgbm"             # lightgbm | xgboost | baseline_ma | baseline_rsi

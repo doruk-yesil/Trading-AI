@@ -78,12 +78,38 @@ def prepare_features(df: pd.DataFrame, feature_cols: list[str]) -> pd.DataFrame:
     return df[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
 
 
+def purge_embargo_days(horizon: Optional[int] = None, embargo_extra_days: int = 3) -> int:
+    """
+    Buffer (in calendar days) to remove from BOTH sides of a train/test
+    boundary before splitting -- purging + embargo, per Marcos Lopez de
+    Prado's "Advances in Financial Machine Learning".
+
+    Why this is needed: the target looks `horizon` TRADING days into the
+    future (forward_return_Nd = close[t+N]/close[t] - 1). A row dated just
+    before a split boundary has a label that depends on prices AFTER that
+    boundary -- i.e. its label window overlaps into the next split. Training
+    on it while validating/testing on the other side leaks information
+    across the split. Purging removes those contaminated rows entirely
+    (rather than reassigning them) on both sides of each boundary; the extra
+    embargo_extra_days is a small additional safety margin against slower,
+    indirect leakage (serial correlation / market-reaction lag).
+
+    horizon (trading days) is converted to calendar days conservatively
+    (x7/5 for weekends, +2 for holidays) since the split itself operates on
+    calendar dates, not a trading calendar.
+    """
+    horizon = horizon if horizon is not None else cfg["prediction_horizon"]
+    calendar_days_for_horizon = int(np.ceil(horizon * 7 / 5)) + 2
+    return calendar_days_for_horizon + embargo_extra_days
+
+
 def time_split(
     df: pd.DataFrame,
     date_col: str = "date",
     train_years: Optional[float] = None,
     val_years: Optional[float] = None,
     test_years: Optional[float] = None,
+    purge: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Chronological train / validation / test split by calendar DATE, anchored
@@ -106,6 +132,14 @@ def time_split(
     assigned to train/val/test based on its own date, uniformly across the
     whole panel.
 
+    purge : bool
+        If True (default), removes a buffer of rows (see purge_embargo_days)
+        immediately before each split boundary from the EARLIER split, so no
+        training row's label window overlaps into validation, and no
+        validation row's label window overlaps into test. This shrinks
+        train/val slightly but is the difference between a split that's
+        actually leakage-free and one that only looks like it is.
+
     Returns (train_df, val_df, test_df).
     """
     train_years = train_years if train_years is not None else cfg["train_years"]
@@ -118,10 +152,78 @@ def time_split(
     val_start   = test_start - pd.Timedelta(days=round(val_years * 365.25))
     train_start = val_start - pd.Timedelta(days=round(train_years * 365.25))
 
-    train_df = df.loc[(dates >= train_start) & (dates < val_start)]
-    val_df   = df.loc[(dates >= val_start) & (dates < test_start)]
+    buffer = pd.Timedelta(days=purge_embargo_days()) if purge else pd.Timedelta(days=0)
+
+    train_df = df.loc[(dates >= train_start) & (dates < val_start - buffer)]
+    val_df   = df.loc[(dates >= val_start) & (dates < test_start - buffer)]
     test_df  = df.loc[dates >= test_start]
     return train_df, val_df, test_df
+
+
+def compute_uniqueness_weights(
+    df: pd.DataFrame,
+    symbol_col: str = "symbol",
+    date_col: str = "date",
+    horizon: Optional[int] = None,
+) -> pd.Series:
+    """
+    Sample weights based on label-window overlap density (Marcos Lopez de
+    Prado's "average uniqueness" concept, "Advances in Financial Machine
+    Learning").
+
+    Why this matters: the target for row i (forward_return_{horizon}d) looks
+    `horizon` trading days ahead. Row i and row i+1 (same symbol) have label
+    windows that overlap over all but one day -- they are NOT independent
+    observations, but a plain .fit() treats every row as equally informative.
+    Rows in the dense middle of a symbol's history are almost entirely
+    redundant with their neighbors; rows near the start/end of a symbol's
+    history overlap with fewer neighbors and carry more unique information.
+    This computes, for each row, the average of 1/concurrency over its label
+    window, where concurrency at a given trading day is how many OTHER
+    labels' windows also cover that day -- exactly Lopez de Prado's average
+    uniqueness measure, adapted for a fixed (non-event-based) horizon.
+
+    Approximation: assumes each symbol has (approximately) one row per
+    trading day with no large gaps -- true for daily OHLCV panels like this
+    one. `horizon` is in TRADING days here (matches prediction_horizon),
+    unlike purge_embargo_days() which converts to calendar days for the
+    date-based split -- these operate on row position, not calendar dates.
+
+    Returns
+    -------
+    pd.Series
+        Weights aligned to df.index, normalized so the mean weight across
+        the whole input is 1.0 (keeps the overall loss scale unchanged --
+        only the RELATIVE weighting between rows matters).
+    """
+    horizon = horizon if horizon is not None else cfg["prediction_horizon"]
+    weights = pd.Series(1.0, index=df.index, dtype=float)
+
+    for _, group in df.groupby(symbol_col):
+        g_sorted = group.sort_values(date_col)
+        m = len(g_sorted)
+        if m == 0:
+            continue
+        # Extend with (horizon - 1) "phantom" inactive rows -- rows this far
+        # past the last real label can't have their own label (mirrors how
+        # build_continuous_target masks the last `horizon` rows as NaN), so
+        # they contribute zero concurrency, which is what creates the
+        # "less overlap near the end of history" edge effect.
+        active = np.concatenate([np.ones(m), np.zeros(horizon - 1)])
+        concurrency = pd.Series(active).rolling(horizon, min_periods=1).sum().to_numpy()
+        inv_concurrency = 1.0 / concurrency
+        cumsum = np.concatenate([[0.0], np.cumsum(inv_concurrency)])
+
+        idx = np.arange(m)
+        window_end = np.minimum(idx + horizon, len(inv_concurrency))
+        avg_uniqueness = (cumsum[window_end] - cumsum[idx]) / (window_end - idx)
+
+        weights.loc[g_sorted.index] = avg_uniqueness
+
+    mean_weight = weights.mean()
+    if mean_weight > 0:
+        weights = weights / mean_weight
+    return weights
 
 
 def build_linear_pipeline() -> Pipeline:
@@ -150,6 +252,7 @@ def train_and_evaluate(
     df: pd.DataFrame,
     target_col: str = "target",
     model_type: str = "linear",
+    splits: Optional[tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]] = None,
 ) -> dict:
     """
     Train a baseline model and evaluate on validation + test splits.
@@ -159,11 +262,16 @@ def train_and_evaluate(
     df : pd.DataFrame
         Pooled feature + target DataFrame (multiple symbols stacked, with a
         'date' column -- see src.data.load_data.load_featured_universe(concat=True)).
+        Ignored when `splits` is given.
     target_col : str
         Name of the target column.
     model_type : str
         'linear' (Ridge/LogisticRegression) or 'random_forest'.
         ('logistic' accepted as an alias for 'linear' for readability.)
+    splits : (train_df, val_df, test_df), optional
+        Pre-computed splits to use instead of deriving them via time_split().
+        Used by src/models/cross_validation.py for purged k-fold CV -- see
+        that module for why folds can't just call time_split() themselves.
 
     Returns
     -------
@@ -171,10 +279,13 @@ def train_and_evaluate(
         {'model', 'feature_cols', 'val_metrics', 'test_metrics',
          'train_df', 'val_df', 'test_df'}
     """
-    df_clean = df.dropna(subset=[target_col])
-    feature_cols = get_feature_columns(df_clean, target_col)
-
-    train_df, val_df, test_df = time_split(df_clean)
+    if splits is not None:
+        train_df, val_df, test_df = splits
+        feature_cols = get_feature_columns(train_df, target_col)
+    else:
+        df_clean = df.dropna(subset=[target_col])
+        feature_cols = get_feature_columns(df_clean, target_col)
+        train_df, val_df, test_df = time_split(df_clean)
 
     X_train = prepare_features(train_df, feature_cols)
     y_train = train_df[target_col]
@@ -186,7 +297,11 @@ def train_and_evaluate(
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
 
-    pipeline.fit(X_train, y_train)
+    if cfg.get("use_sample_weighting", True) and len(train_df) > 0:
+        sample_weight = compute_uniqueness_weights(train_df).to_numpy()
+        pipeline.fit(X_train, y_train, clf__sample_weight=sample_weight)
+    else:
+        pipeline.fit(X_train, y_train)
 
     is_continuous = cfg.get("target_type", "binary") == "continuous"
     val_metrics, test_metrics = {}, {}
