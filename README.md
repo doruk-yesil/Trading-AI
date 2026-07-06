@@ -52,6 +52,18 @@ python scripts/daily_scan_report.py --top 15      # longer lists
 python scripts/daily_scan_report.py --symbols AAPL MSFT NVDA SPY
 ```
 
+### Live report on GitHub Pages (no server needed)
+
+`.github/workflows/daily-scan.yml` runs the whole thing on GitHub's servers every weekday after US market close — downloads the last 2 years of data (enough for every feature window), rebuilds features, generates the report, and publishes it as a static page.
+
+One-time setup after pushing to GitHub:
+
+1. Repo **Settings → Pages → Source: "GitHub Actions"**
+2. Test it: **Actions tab → "Daily market scan" → Run workflow**
+3. Report appears at `https://<username>.github.io/<repo>/`
+
+If Yahoo rate-limits GitHub's IPs (occasional 429s), the local Task Scheduler pipeline is the fallback — it produces the identical `reports/scans/latest.html`.
+
 ---
 
 ## Pipeline Overview

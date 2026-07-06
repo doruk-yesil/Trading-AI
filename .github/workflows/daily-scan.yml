@@ -1,0 +1,78 @@
+# Daily market scan -> GitHub Pages
+#
+# Runs on GitHub's servers every weekday after US market close:
+#   1. Downloads the last 2 years of daily OHLCV for the S&P 500 universe
+#      (2y is enough for every feature window: sma_200, 252d high/low, etc.)
+#   2. Rebuilds the feature panel (features only, no ML target)
+#   3. Generates the daily scan report
+#   4. Publishes reports/scans/latest.html as the GitHub Pages site
+#
+# One-time repo setup: Settings -> Pages -> Source: "GitHub Actions".
+# Manual test run:     Actions tab -> "Daily market scan" -> Run workflow.
+#
+# Note: Yahoo occasionally rate-limits cloud IPs. If the download stage
+# starts failing with HTTP 429s, fall back to generating the report locally
+# (Task Scheduler already does) and pushing it, or add retries here.
+
+name: Daily market scan
+
+on:
+  schedule:
+    # 23:00 UTC, Mon-Fri (after US market close incl. winter time)
+    - cron: "0 23 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daily-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-ci.txt
+
+      - name: Download daily OHLCV (last 2 years)
+        run: python scripts/download_yahoo_finance.py --period 2y
+
+      - name: Build features (no ML target needed for the scan)
+        run: python scripts/build_features.py --no-target
+
+      - name: Generate scan report
+        run: python scripts/daily_scan_report.py
+
+      - name: Assemble Pages site
+        run: |
+          mkdir -p site
+          cp reports/scans/latest.html site/index.html
+          cp reports/scans/latest.md site/latest.md
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: scan
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
