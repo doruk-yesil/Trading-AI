@@ -67,20 +67,45 @@ DISCLAIMER = (
 def load_last_rows(symbols: list[str]) -> pd.DataFrame:
     """Read only the scan columns from each symbol's parquet, keep last row."""
     rows = []
+    errors: list[tuple[str, str]] = []
     for sym in symbols:
         fp = PROCESSED_DIR / f"{sym}_featured.parquet"
         if not fp.exists():
             continue
         try:
             df = pd.read_parquet(fp, columns=SCAN_COLUMNS)
+            if "date" not in df.columns:
+                # 'date' was stored as the index, not a column.
+                df = df.reset_index()
         except Exception:
-            # Column mismatch or corrupt file -- skip rather than crash.
-            continue
+            # Column-filtered read failed (e.g. a column is missing). Fall
+            # back to a full read and self-heal what we can; only give up on
+            # this symbol if core columns are truly absent.
+            try:
+                df = pd.read_parquet(fp).reset_index()
+                if "symbol" not in df.columns:
+                    df["symbol"] = sym
+                missing = [c for c in SCAN_COLUMNS if c not in df.columns]
+                if missing:
+                    errors.append((sym, f"missing columns: {missing[:5]}"))
+                    continue
+                df = df[SCAN_COLUMNS]
+            except Exception as e:  # noqa: BLE001
+                errors.append((sym, repr(e)))
+                continue
         if df.empty:
+            errors.append((sym, "empty file"))
             continue
         rows.append(df.iloc[-1])
+    if errors:
+        print(f"[scan] WARNING: {len(errors)} symbols skipped. First few reasons:")
+        for sym, err in errors[:5]:
+            print(f"[scan]   {sym}: {err}")
     if not rows:
-        raise SystemExit("No processed data found. Run daily_refresh.py first.")
+        raise SystemExit(
+            f"No readable processed data ({len(errors)} files failed, see above). "
+            "Run daily_refresh.py / build_features.py first."
+        )
     panel = pd.DataFrame(rows).reset_index(drop=True)
     panel["date"] = pd.to_datetime(panel["date"])
     # Keep only symbols whose data is current (== latest date in the panel).
