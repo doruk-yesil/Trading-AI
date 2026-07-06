@@ -15,16 +15,17 @@ Each run:
      lookback is capped at ~730 days) -- scripts/download_hourly_data.py
   4. Rebuilds data/processed/*_featured.parquet from the fresh daily data
      -- scripts/build_features.py
+  5. Generates the daily market scan report (Markdown + HTML under
+     reports/scans/) -- scripts/daily_scan_report.py
 
 Steps run as subprocesses (not imports) so a failure in one stage doesn't
 take down the others, and each stage's own CLI / manifest logic stays the
 single source of truth.
 
-Note: the current feature set (173 columns) and 5-day binary target are
-placeholders (mock) and expected to be redefined. This script doesn't
-hardcode that -- it just always regenerates whatever build_features.py
-currently produces, so once the feature/target definitions change, this
-pipeline picks it up automatically with no changes needed here.
+The feature set (173 features + OHLCV + 15-day continuous forward-return
+target) is defined in build_features.py / src/features/; this script just
+regenerates whatever that currently produces, so feature/target changes
+are picked up automatically with no changes needed here.
 
 Usage:
   python scripts/daily_refresh.py
@@ -71,6 +72,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-daily", action="store_true", help="Skip the daily OHLCV re-download.")
     parser.add_argument("--skip-hourly", action="store_true", help="Skip the hourly accumulation step.")
     parser.add_argument("--skip-features", action="store_true", help="Skip feature rebuild.")
+    parser.add_argument("--skip-scan", action="store_true", help="Skip the daily scan report.")
     return parser.parse_args()
 
 
@@ -155,6 +157,16 @@ def main() -> None:
     else:
         print("Skipping feature rebuild stage.\n")
 
+    if not args.skip_scan:
+        ok, out = run_stage(
+            "Daily scan report (reports/scans/)",
+            [python, str(SCRIPTS_DIR / "daily_scan_report.py"), *symbol_flag],
+        )
+        stage_results["scan_report"] = ok
+        stage_outputs["scan_report"] = out
+    else:
+        print("Skipping scan report stage.\n")
+
     run_finished = datetime.now()
     elapsed = (run_finished - run_started).total_seconds()
 
@@ -183,5 +195,5 @@ def main() -> None:
         sys.exit(1)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

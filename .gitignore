@@ -9,6 +9,7 @@ configs/sp500_constituents_cache.csv
 reports/refresh_logs/
 
 # Reports output — generated, not source
+reports/scans/
 reports/figures/
 reports/backtests/
 reports/experiments/
