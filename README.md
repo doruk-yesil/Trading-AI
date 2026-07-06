@@ -44,7 +44,7 @@ The data pipeline, feature engineering, and automation were solid — so they no
 - **RSI extremes** (≤ 30 oversold, ≥ 75 overbought)
 - **Largest single-day moves**
 
-Output: Markdown + self-contained HTML under `reports/scans/` (dated file + `latest.*`), currently written in Turkish. Runs automatically as the final stage of the daily refresh.
+Output: Markdown + self-contained HTML under `reports/scans/` (dated file + `latest.*`). Runs automatically as the final stage of the daily refresh.
 
 ```bash
 python scripts/daily_scan_report.py               # full universe

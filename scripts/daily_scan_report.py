@@ -3,7 +3,7 @@ daily_scan_report.py
 --------------------
 Daily S&P 500 market scanner. Reads the already-built feature panel
 (data/processed/*_featured.parquet) and produces a human-readable daily
-report (Turkish) in Markdown + HTML under reports/scans/.
+report in Markdown + HTML under reports/scans/.
 
 This is DETECTION, not PREDICTION: no model, no forecast. It surfaces what
 happened yesterday that deviates from each stock's own recent norm --
@@ -55,8 +55,8 @@ SCAN_COLUMNS = [
 ]
 
 DISCLAIMER = (
-    "Bu rapor otomatik olarak uretilmis istatistiksel bir taramadir. "
-    "Yatirim tavsiyesi degildir; alim/satim onerisi icermez."
+    "This report is an automatically generated statistical scan. "
+    "It is not investment advice and contains no buy/sell recommendations."
 )
 
 
@@ -134,11 +134,11 @@ def load_regime(benchmark: str = BENCHMARK) -> dict:
     trailing = df["rolling_volatility_20"].tail(252).dropna()
     vol_pct = float((trailing <= last["rolling_volatility_20"]).mean() * 100)
     if vol_pct < 40:
-        label = "SAKIN"
+        label = "CALM"
     elif vol_pct < 75:
         label = "NORMAL"
     else:
-        label = "CALKANTILI"
+        label = "TURBULENT"
     return {
         "label": label,
         "vol_pct": vol_pct,
@@ -173,101 +173,101 @@ def build_sections(panel: pd.DataFrame, top: int) -> list[tuple[str, pd.DataFram
     # 1) Unusual volume
     vol = p[p["volume_vs_sma20"] >= 2.0].sort_values("volume_vs_sma20", ascending=False).head(top)
     if not vol.empty:
-        t = table(vol, {"symbol": "Sembol", "volume_vs_sma20": "Hacim / 20g Ort.",
-                        "daily_return": "Gunluk Getiri", "return_5d": "5g Getiri"},
+        t = table(vol, {"symbol": "Symbol", "volume_vs_sma20": "Vol / 20d Avg",
+                        "daily_return": "1d Return", "return_5d": "5d Return"},
                   {"daily_return", "return_5d"})
-        t["Hacim / 20g Ort."] = vol["volume_vs_sma20"].map(lambda v: f"{v:.1f}x").values
+        t["Vol / 20d Avg"] = vol["volume_vs_sma20"].map(lambda v: f"{v:.1f}x").values
         sections.append((
-            "Anormal Hacim",
+            "Unusual Volume",
             t,
-            "20 gunluk ortalamasinin en az 2 kati hacimle islem gorenler. "
-            "Yuksek hacim + sert fiyat hareketi genelde yeni bir haber/gelisme isaretidir.",
+            "Stocks trading on at least 2x their 20-day average volume. "
+            "High volume plus a sharp price move usually signals news or a new development.",
         ))
 
     # 2) Breakouts (50d high with volume interest)
     br = p[p["breakout_above_50d_high"] == 1].sort_values("volume_vs_sma20", ascending=False).head(top)
     if not br.empty:
-        t = table(br, {"symbol": "Sembol", "daily_return": "Gunluk Getiri",
-                       "return_20d": "20g Getiri", "volume_vs_sma20": "Hacim Orani"},
+        t = table(br, {"symbol": "Symbol", "daily_return": "1d Return",
+                       "return_20d": "20d Return", "volume_vs_sma20": "Vol Ratio"},
                   {"daily_return", "return_20d"})
-        t["Hacim Orani"] = br["volume_vs_sma20"].map(lambda v: f"{v:.1f}x").values
+        t["Vol Ratio"] = br["volume_vs_sma20"].map(lambda v: f"{v:.1f}x").values
         sections.append((
-            "Momentum: 50 Gunluk Zirve Kirilimlari",
+            "Momentum: 50-Day Breakouts",
             t,
-            "Son 50 gunun en yuksek kapanisinin uzerine cikanlar.",
+            "Closes above the highest close of the last 50 days.",
         ))
 
     # 3) Breakdowns
     bd = p[p["breakdown_below_50d_low"] == 1].sort_values("volume_vs_sma20", ascending=False).head(top)
     if not bd.empty:
-        t = table(bd, {"symbol": "Sembol", "daily_return": "Gunluk Getiri",
-                       "return_20d": "20g Getiri", "volume_vs_sma20": "Hacim Orani"},
+        t = table(bd, {"symbol": "Symbol", "daily_return": "1d Return",
+                       "return_20d": "20d Return", "volume_vs_sma20": "Vol Ratio"},
                   {"daily_return", "return_20d"})
-        t["Hacim Orani"] = bd["volume_vs_sma20"].map(lambda v: f"{v:.1f}x").values
+        t["Vol Ratio"] = bd["volume_vs_sma20"].map(lambda v: f"{v:.1f}x").values
         sections.append((
-            "Zayiflik: 50 Gunluk Dip Kirilimlari",
+            "Weakness: 50-Day Breakdowns",
             t,
-            "Son 50 gunun en dusuk kapanisinin altina inenler.",
+            "Closes below the lowest close of the last 50 days.",
         ))
 
     # 4) Near 52-week high / low
     near_hi = p[p["drawdown_from_252d_high"] >= -0.01].sort_values(
         "return_20d", ascending=False).head(top)
     if not near_hi.empty:
-        t = table(near_hi, {"symbol": "Sembol", "drawdown_from_252d_high": "Zirveye Uzaklik",
-                            "return_20d": "20g Getiri", "return_60d": "60g Getiri"},
+        t = table(near_hi, {"symbol": "Symbol", "drawdown_from_252d_high": "From High",
+                            "return_20d": "20d Return", "return_60d": "60d Return"},
                   {"drawdown_from_252d_high", "return_20d", "return_60d"})
         sections.append((
-            "52 Haftalik Zirvesinde / Cok Yakininda",
+            "At / Near 52-Week High",
             t,
-            "Son 1 yilin en yuksek seviyesinin %1 bandinda olanlar.",
+            "Within 1% of the highest level of the past year.",
         ))
 
     near_lo = p[p["close_vs_prev_252d_low"] <= 0.01].sort_values(
         "return_20d", ascending=True).head(top)
     if not near_lo.empty:
-        t = table(near_lo, {"symbol": "Sembol", "drawdown_from_252d_high": "Zirveden Dusus",
-                            "return_20d": "20g Getiri", "return_60d": "60g Getiri"},
+        t = table(near_lo, {"symbol": "Symbol", "drawdown_from_252d_high": "From 52w High",
+                            "return_20d": "20d Return", "return_60d": "60d Return"},
                   {"drawdown_from_252d_high", "return_20d", "return_60d"})
         sections.append((
-            "52 Haftalik Dibinde / Cok Yakininda",
+            "At / Near 52-Week Low",
             t,
-            "Son 1 yilin en dusuk seviyesinin %1 bandinda olanlar.",
+            "Within 1% of the lowest level of the past year.",
         ))
 
     # 5) RSI extremes
     oversold = p[p["rsi_14"] <= 30].sort_values("rsi_14").head(top)
     if not oversold.empty:
-        t = table(oversold, {"symbol": "Sembol", "rsi_14": "RSI(14)",
-                             "return_5d": "5g Getiri", "return_20d": "20g Getiri"},
+        t = table(oversold, {"symbol": "Symbol", "rsi_14": "RSI(14)",
+                             "return_5d": "5d Return", "return_20d": "20d Return"},
                   {"return_5d", "return_20d"})
         t["RSI(14)"] = oversold["rsi_14"].map(lambda v: f"{v:.0f}").values
         sections.append((
-            "Asiri Satim Bolgesi (RSI <= 30)",
+            "Oversold (RSI <= 30)",
             t,
-            "Kisa vadede sert dusmus olanlar. Dusuk RSI tek basina 'al' sinyali degildir.",
+            "Sharp short-term declines. A low RSI alone is not a buy signal.",
         ))
 
     overbought = p[p["rsi_14"] >= 75].sort_values("rsi_14", ascending=False).head(top)
     if not overbought.empty:
-        t = table(overbought, {"symbol": "Sembol", "rsi_14": "RSI(14)",
-                               "return_5d": "5g Getiri", "return_20d": "20g Getiri"},
+        t = table(overbought, {"symbol": "Symbol", "rsi_14": "RSI(14)",
+                               "return_5d": "5d Return", "return_20d": "20d Return"},
                   {"return_5d", "return_20d"})
         t["RSI(14)"] = overbought["rsi_14"].map(lambda v: f"{v:.0f}").values
         sections.append((
-            "Asiri Alim Bolgesi (RSI >= 75)",
+            "Overbought (RSI >= 75)",
             t,
-            "Kisa vadede cok hizli yukselmis olanlar.",
+            "Very fast short-term run-ups.",
         ))
 
     # 6) Biggest single-day moves
     movers = p.reindex(p["daily_return"].abs().sort_values(ascending=False).index).head(top)
-    t = table(movers, {"symbol": "Sembol", "daily_return": "Gunluk Getiri",
-                       "volume_vs_sma20": "Hacim Orani", "rsi_14": "RSI(14)"},
+    t = table(movers, {"symbol": "Symbol", "daily_return": "1d Return",
+                       "volume_vs_sma20": "Vol Ratio", "rsi_14": "RSI(14)"},
               {"daily_return"})
-    t["Hacim Orani"] = movers["volume_vs_sma20"].map(lambda v: f"{v:.1f}x").values
+    t["Vol Ratio"] = movers["volume_vs_sma20"].map(lambda v: f"{v:.1f}x").values
     t["RSI(14)"] = movers["rsi_14"].map(lambda v: f"{v:.0f}").values
-    sections.append(("Gunun En Sert Hareketleri", t, "Mutlak gunluk getiriye gore."))
+    sections.append(("Biggest Moves of the Day", t, "Ranked by absolute daily return."))
 
     return sections
 
@@ -277,20 +277,20 @@ def build_sections(panel: pd.DataFrame, top: int) -> list[tuple[str, pd.DataFram
 # ----------------------------------------------------------------------
 
 def render_markdown(date: pd.Timestamp, regime: dict, sections, n_symbols: int) -> str:
-    lines = [f"# Gunluk Piyasa Taramasi — {date.date()}", ""]
+    lines = [f"# Daily Market Scan — {date.date()}", ""]
     if regime:
         trend = []
-        trend.append("SMA50 ustunde" if regime["above_sma50"] else "SMA50 altinda")
-        trend.append("SMA200 ustunde" if regime["above_sma200"] else "SMA200 altinda")
+        trend.append("above SMA50" if regime["above_sma50"] else "below SMA50")
+        trend.append("above SMA200" if regime["above_sma200"] else "below SMA200")
         lines += [
-            f"**Piyasa Rejimi ({BENCHMARK}): {regime['label']}**",
+            f"**Market Regime ({BENCHMARK}): {regime['label']}**",
             "",
-            f"- 20 gunluk volatilite, son 1 yilin %{regime['vol_pct']:.0f} yuzdelik diliminde",
-            f"- Son 5 gun {_fmt_pct(regime['ret_5d'])}, son 20 gun {_fmt_pct(regime['ret_20d'])}",
-            f"- Trend: {', '.join(trend)}; 52h zirveden {_fmt_pct(regime['drawdown_252d'])}",
+            f"- 20-day volatility at the {regime['vol_pct']:.0f}th percentile of the past year",
+            f"- Last 5 days {_fmt_pct(regime['ret_5d'])}, last 20 days {_fmt_pct(regime['ret_20d'])}",
+            f"- Trend: {', '.join(trend)}; {_fmt_pct(regime['drawdown_252d'])} from 52-week high",
             "",
         ]
-    lines.append(f"*Taranan sembol: {n_symbols} (S&P 500)*")
+    lines.append(f"*Symbols scanned: {n_symbols} (S&P 500)*")
     lines.append("")
     for title, tbl, note in sections:
         lines += [f"## {title}", "", f"_{note}_", ""]
@@ -310,9 +310,9 @@ th,td{border:1px solid #ddd;padding:6px 10px;text-align:left}
 th{background:#16213e;color:#fff}
 tr:nth-child(even){background:#f4f6fa}
 .regime{padding:10px 14px;border-radius:8px;display:inline-block;font-weight:600}
-.SAKIN{background:#d4edda;color:#155724}
+.CALM{background:#d4edda;color:#155724}
 .NORMAL{background:#fff3cd;color:#856404}
-.CALKANTILI{background:#f8d7da;color:#721c24}
+.TURBULENT{background:#f8d7da;color:#721c24}
 .note{color:#666;font-style:italic;font-size:.9em}
 .disclaimer{margin-top:32px;padding:10px;background:#eee;border-radius:6px;
 font-size:.85em;color:#555}
@@ -321,15 +321,15 @@ font-size:.85em;color:#555}
 
 def render_html(date: pd.Timestamp, regime: dict, sections, n_symbols: int) -> str:
     parts = [f"<html><head><meta charset='utf-8'><style>{HTML_CSS}</style></head><body>"]
-    parts.append(f"<h1>Gunluk Piyasa Taramasi — {date.date()}</h1>")
+    parts.append(f"<h1>Daily Market Scan — {date.date()}</h1>")
     if regime:
         parts.append(
-            f"<p><span class='regime {regime['label']}'>Piyasa Rejimi: {regime['label']}</span></p>"
-            f"<p class='note'>20g volatilite yillik %{regime['vol_pct']:.0f} dilimde · "
-            f"5g {_fmt_pct(regime['ret_5d'])} · 20g {_fmt_pct(regime['ret_20d'])} · "
-            f"52h zirveden {_fmt_pct(regime['drawdown_252d'])}</p>"
+            f"<p><span class='regime {regime['label']}'>Market Regime: {regime['label']}</span></p>"
+            f"<p class='note'>20d volatility at the {regime['vol_pct']:.0f}th percentile of the past year · "
+            f"5d {_fmt_pct(regime['ret_5d'])} · 20d {_fmt_pct(regime['ret_20d'])} · "
+            f"{_fmt_pct(regime['drawdown_252d'])} from 52w high</p>"
         )
-    parts.append(f"<p class='note'>Taranan sembol: {n_symbols} (S&amp;P 500)</p>")
+    parts.append(f"<p class='note'>Symbols scanned: {n_symbols} (S&amp;P 500)</p>")
     for title, tbl, note in sections:
         parts.append(f"<h2>{title}</h2><p class='note'>{note}</p>")
         parts.append(tbl.to_html(index=False, border=0))
