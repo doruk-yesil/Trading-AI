@@ -1,5 +1,7 @@
 # Trading-AI
 
+**Live daily scan:** [doruk-yesil.github.io/Trading-AI](https://doruk-yesil.github.io/Trading-AI/) — updated every weekday after US market close.
+
 ML trading-signal research on the S&P 500 — with an honest negative result — plus the useful tool that survived it: an automated **daily market scanner**.
 
 This repo did the experiment properly (purged cross-validation, embargo periods, sample-uniqueness weighting, realistic cost assumptions, per-regime evaluation) and reached the conclusion most quant literature predicts for daily public OHLCV data: **there is no exploitable edge here**. Rather than hide that, the repo documents it — and repurposes the data/feature pipeline into a daily anomaly scanner that produces something actually useful every morning.
