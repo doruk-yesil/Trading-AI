@@ -191,3 +191,10 @@ Key settings in `configs/config.yaml`:
 ---
 
 *Research project. Nothing here is financial advice; the scan report explicitly carries the same disclaimer. If anything, the headline finding is a reason **not** to trade on models like this.*
+
+
+## Resuming without previous chat context
+
+Start with `configs/config.yaml`, the pipeline scripts listed above and their corresponding `src/` modules. The numerical findings above are the repository's recorded research results; the 8 November 2026 documentation review did not rerun training, reproduce those statistics or verify that the scheduled scanner is currently healthy. Check workflow runs and report timestamps before relying on automation status.
+
+The ignored `data/` and `reports/` directories, trained models and locally accumulated hourly history are **not backed up by cloning this repository**. Preserve them separately before removing a local workspace. Historical chat-only decisions and experiment notes also need a separate export if they are not already in the repo. Record the next experiment, its rationale and reproducible command in versioned documentation.
